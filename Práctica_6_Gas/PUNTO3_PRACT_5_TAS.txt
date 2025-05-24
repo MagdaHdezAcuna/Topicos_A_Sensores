@@ -1,0 +1,221 @@
+// --- Librerías Necesarias ---
+#include <LiquidCrystal_I2C.h> // Librería para LCD 16x2 con módulo I2C
+
+// --- Definiciones para la Pantalla LCD ---
+// Inicializa el objeto LCD. Parámetros: (dirección I2C, columnas, filas)
+// La dirección I2C más común para estos módulos es 0x27 o 0x3F.
+// Si no funciona con 0x27, prueba con 0x3F.
+LiquidCrystal_I2C lcd(0x27, 16, 2); // 16 columnas, 2 filas
+
+// --- Declaración de Pines y Constantes ---
+const int pin_MQ2 = A0;                    // Pin analógico al que está conectado la salida A0 del MQ-2
+const int pin_buzzer = 8;                  // Pin digital para el buzzer
+
+const unsigned long tiempo_calentamiento = 45000;   // Tiempo de calentamiento del sensor en milisegundos (45 segundos)
+const unsigned long tiempo_espera_post_ejercicio = 60000; // Tiempo de espera después del ejercicio (60 segundos)
+const unsigned long tiempo_medicion = 30000;       // Tiempo durante el cual se toma la medición (30 segundos)
+const unsigned long tiempo_espera_lectura = 500;   // Tiempo de espera en milisegundos entre lecturas durante la medición
+
+// --- Variables para las Mediciones ---
+float promedio_reposo = 0;
+float promedio_ejercicio = 0;
+
+// --- Función para generar doble pitido ---
+void beep() {
+  digitalWrite(pin_buzzer, HIGH); // Encender buzzer
+  delay(100);                    // Pitido corto
+  digitalWrite(pin_buzzer, LOW);  // Apagar buzzer
+  delay(100);                    // Pequeña pausa
+  digitalWrite(pin_buzzer, HIGH); // Segundo pitido
+  delay(100);
+  digitalWrite(pin_buzzer, LOW);  // Apagar buzzer
+}
+
+// --- Función de Configuración (se ejecuta una vez al inicio) ---
+void setup() {
+  Serial.begin(9600); // Inicializa la comunicación serial para depuración
+  Serial.println("Iniciando configuracion...");
+
+  pinMode(pin_buzzer, OUTPUT); // Configura el pin del buzzer como salida
+
+  // Inicializa el LCD
+  lcd.init();      // Inicializa el módulo LCD I2C
+  lcd.backlight(); // Enciende la luz de fondo del LCD
+
+  Serial.println("Configuracion completa. Esperando calentamiento del sensor.");
+
+  // --- Fase de Calentamiento del Sensor ---
+  lcd.clear(); // Limpia la pantalla
+  lcd.setCursor(0, 0); // Coloca el cursor en la columna 0, fila 0
+  lcd.print("Calentando Sensor");
+  lcd.setCursor(0, 1); // Coloca el cursor en la columna 0, fila 1
+  lcd.print("Espere ~45 seg");
+  delay(500); // Pequeña pausa para que el texto aparezca antes del beep
+  beep();     // Pitido al cambiar de pantalla
+  
+  // Monitoreo del tiempo de calentamiento con pitidos
+  for (unsigned long i = 0; i < tiempo_calentamiento; i += 1000) { // Contar cada segundo
+    if (i % 10000 == 0 && i != 0) { // Cada 10 segundos
+      beep();
+    }
+    delay(1000); // Esperar 1 segundo
+  }
+  Serial.println("Sensor listo.");
+}
+
+// --- Función Loop (se ejecuta repetidamente) ---
+void loop() {
+  // Solo queremos que la secuencia de prueba se ejecute una vez al presionar reset o encender.
+  realizarMedicionCompleta(); // Llama a la función principal de medición
+  
+  // Después de mostrar el resultado final, el programa se detendrá aquí indefinidamente
+  // hasta que se reinicie el Arduino.
+  for(;;); 
+}
+
+// --- Función para realizar una medición completa ---
+void realizarMedicionCompleta() {
+  // --- Fase 1: Medición en Reposo ---
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("MEDICION REPOSO");
+  lcd.setCursor(0, 1);
+  lcd.print("Respire normal.");
+  delay(500); // Pequeña pausa para que el texto aparezca antes del beep
+  beep();     // Pitido al cambiar de pantalla
+  delay(5000); // Dar un breve tiempo para prepararse
+
+  Serial.println("\n--- Iniciando medicion en reposo ---");
+  long total_reposo = 0;
+  int num_lecturas_reposo = tiempo_medicion / tiempo_espera_lectura;
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("MEDICION REPOSO");
+  lcd.setCursor(0, 1);
+  lcd.print("Leyendo (30s)...");
+  delay(500); // Pequeña pausa para que el texto aparezca antes del beep
+  beep();     // Pitido al cambiar de pantalla
+
+
+  for (int i = 0; i < num_lecturas_reposo; i++) {
+    int valor_reposo = analogRead(pin_MQ2);
+    total_reposo = total_reposo + valor_reposo;
+    Serial.print("Reposo Lectura "); Serial.print(i + 1); Serial.print(": "); Serial.println(valor_reposo);
+    delay(tiempo_espera_lectura);
+  }
+
+  promedio_reposo = (float)total_reposo / num_lecturas_reposo;
+  Serial.print("Promedio en reposo: "); Serial.println(promedio_reposo);
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("REPOSO PROMEDIO:");
+  lcd.setCursor(0, 1);
+  lcd.print(promedio_reposo, 1); // Mostrar con un decimal
+  delay(500); // Pequeña pausa para que el texto aparezca antes del beep
+  beep();     // Pitido al cambiar de pantalla
+  delay(3000); // Mostrar el promedio por 3 segundos
+
+  // --- Fase 2: Actividad Física ---
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("LISTO PARA:");
+  lcd.setCursor(0, 1);
+  lcd.print("CORRER 50 METROS");
+  delay(500); // Pequeña pausa para que el texto aparezca antes del beep
+  beep();     // Pitido al cambiar de pantalla
+  delay(2000); // Pequeña pausa para que se vea
+  Serial.println("\n--- Realice actividad fisica ---");
+  Serial.println("Corra 50 metros lo mas rapido posible.");
+  // (Aquí la persona realiza la actividad física)
+  Serial.println("Actividad fisica completada. Espere 1 minuto antes de la siguiente medicion.");
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("ACTIVIDAD COMPLETA");
+  lcd.setCursor(0, 1);
+  lcd.print("Espere 1 minuto...");
+  delay(500); // Pequeña pausa para que el texto aparezca antes del beep
+  beep();     // Pitido al cambiar de pantalla
+  
+  // Monitoreo del tiempo de espera post-ejercicio con pitidos
+  for (unsigned long i = 0; i < tiempo_espera_post_ejercicio; i += 1000) {
+    if ((tiempo_espera_post_ejercicio - i) <= 10000) { // Últimos 10 segundos (incluido el último segundo)
+      beep(); // Cada segundo
+    } else if (i % 10000 == 0 && i != 0) { // Cada 10 segundos fuera de los últimos 10s
+      beep();
+    }
+    delay(1000);
+  }
+
+  // --- Fase 3: Medición Post-Ejercicio ---
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("MEDICION POST EJ.");
+  lcd.setCursor(0, 1);
+  lcd.print("Exhale al sensor.");
+  delay(500); // Pequeña pausa para que el texto aparezca antes del beep
+  beep();     // Pitido al cambiar de pantalla
+  delay(5000); // Dar un breve tiempo para prepararse
+
+  Serial.println("\n--- Iniciando medicion post-ejercicio ---");
+  long total_ejercicio = 0;
+  int num_lecturas_ejercicio = tiempo_medicion / tiempo_espera_lectura;
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("POST EJERCICIO");
+  lcd.setCursor(0, 1);
+  lcd.print("Exhalando (30s)...");
+  delay(500); // Pequeña pausa para que el texto aparezca antes del beep
+  beep();     // Pitido al cambiar de pantalla
+
+  for (int i = 0; i < num_lecturas_ejercicio; i++) {
+    int valor_ejercicio = analogRead(pin_MQ2);
+    total_ejercicio = total_ejercicio + valor_ejercicio;
+    Serial.print("Post Ej Lectura "); Serial.print(i + 1); Serial.print(": "); Serial.println(valor_ejercicio);
+    delay(tiempo_espera_lectura);
+  }
+
+  promedio_ejercicio = (float)total_ejercicio / num_lecturas_ejercicio;
+  Serial.print("Promedio post-ejercicio: "); Serial.println(promedio_ejercicio);
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("POST EJ. PROMEDIO:");
+  lcd.setCursor(0, 1);
+  lcd.print(promedio_ejercicio, 1); // Mostrar con un decimal
+  delay(500); // Pequeña pausa para que el texto aparezca antes del beep
+  beep();     // Pitido al cambiar de pantalla
+  delay(3000); // Mostrar el promedio por 3 segundos
+
+  // --- Fase 4: Análisis y Resultado Final en Pantalla LCD ---
+  Serial.println("\n--- Analisis de Resultados ---");
+  Serial.print("Valor promedio en reposo: "); Serial.println(promedio_reposo);
+  Serial.print("Valor promedio post-ejercicio: "); Serial.println(promedio_ejercicio);
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("R: ");
+  lcd.print(promedio_reposo, 1); // Promedio reposo
+  lcd.print(" E: ");
+  lcd.print(promedio_ejercicio, 1); // Promedio ejercicio
+
+  lcd.setCursor(0, 1); // Segunda línea para el análisis
+  if (promedio_ejercicio > promedio_reposo) {
+    lcd.print("AUMENTO DETECTADO");
+    Serial.println("Se detecto un aumento en la lectura del sensor despues del ejercicio.");
+  } else if (promedio_ejercicio < promedio_reposo) {
+    lcd.print("DISMINUCION DETEC"); // Abreviado para caber en 16 caracteres
+    Serial.println("Se detecto una disminucion en la lectura del sensor despues del ejercicio.");
+  } else {
+    lcd.print("SIN DIFERENCIA");
+    Serial.println("No se detecto una diferencia significativa en la lectura del sensor.");
+  }
+  delay(500); // Pequeña pausa para que el texto aparezca antes del beep
+  beep();     // Pitido al cambiar a la pantalla final
+  
+  // El programa se detendrá en el loop() después de esta fase, manteniendo el resultado en pantalla.
+  Serial.println("\nFin del programa.");
+}

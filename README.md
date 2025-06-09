@@ -6,4 +6,4 @@ NOMBRE DE LOS INEGRANTAS DE EQUIPO
 - Set Arnufo Salcedo Hernández
 - Jesús Andrés Orozco Ortiz
 
-## Repositorio TAS 2025-2
+## Repositorio Topicos Avanzados de Sensores 2025-2

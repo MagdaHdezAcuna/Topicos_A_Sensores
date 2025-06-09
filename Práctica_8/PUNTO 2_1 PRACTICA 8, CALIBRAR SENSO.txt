@@ -1,0 +1,118 @@
+// PUNTO 2 PRACTICA 8, CALIBRAR SENSOR DE FLUJO
+// Incluir librerías necesarias
+#include <Wire.h> // Necesaria para comunicación I2C
+#include <LiquidCrystal_I2C.h> // para la pantalla LCD I2C
+
+// --- Pines y configuración ---
+const int flowSensorPin = 2;   // señal amarilla del sensor de flujo 
+const int buttonPin = 7;       //Conectamos el botón
+
+// Dirección I2C de la LCD (comúnmente 0x27 o 0x3F, puedes necesitar probar)
+// El 16 y 2 son las dimensiones de la pantalla LCD (16 columnas, 2 filas)
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// --- Variables para el Sensor de Flujo ---
+volatile unsigned long pulseCount = 0; // Se usa 'volatile' porque se modifica dentro de una interrupción
+                                       // 'unsigned long' para contar muchos pulsos sin desbordamiento
+
+// --- Variables para el control del botón ---
+bool calibrating = false;             // Bandera para saber si estamos contando pulsos
+unsigned long lastButtonPressTime = 0; // Guarda el último tiempo de pulsación del botón
+const unsigned long debounceDelay = 50; // Tiempo de retardo para evitar rebotes del botón (en ms)
+int calibrationAttempt = 0;           // Contador para el número de intento de calibración
+
+// --- Función de Interrupción ---
+// Esta función se ejecuta CADA VEZ que el sensor de flujo envía un pulso
+void pulseCounter() {
+  if (calibrating) { // Solo contamos si la calibración está activa
+    pulseCount++;
+  }
+}
+
+// --- Configuración Inicial ---
+void setup() {
+  // Inicializar comunicación serial para depuración
+  Serial.begin(9600);
+  Serial.println("Iniciando programa de calibracion del sensor YF-S201...");
+
+  // Inicializar la LCD
+  lcd.init();      // Inicializa la pantalla
+  lcd.backlight(); // Enciende la luz de fondo de la pantalla
+
+  // Configurar el pin del sensor de flujo como entrada
+  pinMode(flowSensorPin, INPUT);
+  // Adjuntar la interrupción al pin del sensor de flujo
+  // RISING: cuenta en el flanco ascendente del pulso (de BAJO a ALTO)
+  attachInterrupt(digitalPinToInterrupt(flowSensorPin), pulseCounter, RISING);
+
+  // Configurar el pin del botón como entrada con resistencia PULLUP interna
+  pinMode(buttonPin, INPUT_PULLUP); // Conecta un lado del botón a este pin y el otro a GND
+
+  // Mensaje inicial en la LCD
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Presiona boton");
+  lcd.setCursor(0, 1);
+  lcd.print("para iniciar");
+}
+
+// --- Bucle Principal ---
+void loop() {
+  // Leer el estado del botón
+  int buttonState = digitalRead(buttonPin);
+
+  // Lógica para detectar una pulsación válida del botón (con debounce)
+  // El botón está conectado a INPUT_PULLUP, por lo tanto, cuando se presiona, el estado es LOW.
+  if (buttonState == LOW && (millis() - lastButtonPressTime) > debounceDelay) {
+    // El botón ha sido presionado y el debounce ha pasado
+
+    lastButtonPressTime = millis(); // Actualizar el tiempo de la última pulsación
+
+    if (!calibrating) { // Si NO estamos calibrando, es una señal para INICIAR
+      calibrationAttempt++;     // Incrementar el número de intento
+      pulseCount = 0;           // Resetear el contador de pulsos
+      calibrating = true;       // Activar la bandera de calibración
+
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Contando...");
+      lcd.setCursor(0, 1);
+      lcd.print("Intento ");
+      lcd.print(calibrationAttempt);
+
+      Serial.print("--- Calibracion Iniciada - Intento ");
+      Serial.print(calibrationAttempt);
+      Serial.println(" ---");
+      Serial.println("Llenando volumen...");
+
+    } else { // Si SÍ estamos calibrando, es una señal para DETENER
+      calibrating = false; // Desactivar la bandera de calibración
+
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Conteo ");
+      lcd.print(calibrationAttempt);
+      lcd.print(":");
+      lcd.setCursor(0, 1);
+      lcd.print(pulseCount); // Mostrar el total de pulsos contados
+
+      Serial.print("--- Calibracion Detenida - Intento ");
+      Serial.print(calibrationAttempt);
+      Serial.println(" ---");
+      Serial.print("Pulsos contados para el volumen: ");
+      Serial.println(pulseCount);
+      Serial.println("Presione el boton para el siguiente intento.");
+      Serial.println(""); // Salto de línea para claridad
+    }
+  }
+
+  //  mostrar los pulsos en tiempo real en la LCD mientras está calibrando
+ 
+  if (calibrating) {
+    lcd.setCursor(0, 1);
+    lcd.print("Pulsos: ");
+    lcd.print(pulseCount);
+    lcd.print("    "); // Para borrar residuos
+  }
+ 
+}

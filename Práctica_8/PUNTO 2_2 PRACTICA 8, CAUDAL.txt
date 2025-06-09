@@ -1,0 +1,120 @@
+#include <Wire.h> // Necesaria para comunicación I2C
+#include <LiquidCrystal_I2C.h> // Necesaria para la pantalla LCD I2C
+
+// --- Configuración de Pines y Constantes ---
+const int flowSensorPin = 2; // señal amarilla del sensor de flujo
+                             
+// Dirección I2C de la LCD 
+LiquidCrystal_I2C lcd(0x27, 16, 2); // 16 columnas, 2 filas
+
+// --- Constante de Calibración ---
+// Usamos el valor que obtuviste en tu calibración
+const float PULSES_PER_LITER = 404.0; // Pulsos que el sensor genera por cada litro *****************
+
+// --- Variables para el Conteo de Pulsos ---
+volatile unsigned long pulseCount = 0; // Se usa 'volatile' porque se modifica dentro de una interrupción
+                                       // 'unsigned long' para contar muchos pulsos sin desbordamiento
+
+// --- Variables para el Cálculo del Caudal ---
+unsigned long lastMillis = 0;       // Guarda el tiempo del último cálculo de caudal
+float flowRateLPM = 0.0;            // Caudal en Litros por Minuto
+float flowRateM3PM = 0.0;           // Caudal en Metros Cúbicos por Minuto
+float totalLiters = 0.0;            // Litros totales acumulados (opcional, para contador de consumo)
+
+// --- Función de Interrupción (ISR) ---
+// Esta función se ejecuta CADA VEZ que el sensor de flujo envía un pulso
+void pulseCounter() {
+  pulseCount++; // Simplemente incrementa el contador de pulsos
+}
+
+// --- Configuración Inicial ---
+void setup() {
+  // Inicializar comunicación serial para depuración (opcional, pero muy útil)
+  Serial.begin(9600);
+  Serial.println("Iniciando Medidor de Flujo YF-S201...");
+  Serial.print("Constante de Pulsos/Litro: ");
+  Serial.println(PULSES_PER_LITER);
+
+  // Inicializar la LCD
+  lcd.init();      // Inicializa la pantalla
+  lcd.backlight(); // Enciende la luz de fondo de la pantalla
+
+  // Configurar el pin del sensor de flujo como entrada
+  pinMode(flowSensorPin, INPUT);
+  // Adjuntar la interrupción al pin del sensor de flujo
+  // RISING: cuenta en el flanco ascendente del pulso (de BAJO a ALTO)
+  attachInterrupt(digitalPinToInterrupt(flowSensorPin), pulseCounter, RISING);
+
+  // Mensaje inicial en la LCD
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Caudal:");
+  lcd.setCursor(0, 1);
+  lcd.print("LPM: 0.00");
+}
+
+// --- Bucle Principal ---
+void loop() {
+  // Calcular el caudal cada segundo 
+  if (millis() - lastMillis >= 1000) { // Si ha pasado 1 segundo (1000 milisegundos)
+    // Desactivar temporalmente las interrupciones para una lectura segura de pulseCount
+    noInterrupts();
+    unsigned long currentPulses = pulseCount;
+    pulseCount = 0; // Resetear el contador de pulsos para el siguiente intervalo
+    interrupts();   // Reactivar las interrupciones
+
+    lastMillis = millis(); // Actualizar el tiempo del último cálculo
+
+    // --- Cálculo del Caudal ---
+    // Caudal en Litros por Segundo
+    float flowRateLPS = currentPulses / PULSES_PER_LITER;
+
+    // Convertir a Litros por Minuto (LPM)
+    flowRateLPM = flowRateLPS * 60.0;
+
+    // Opcional: Convertir a Metros Cúbicos por Minuto (m3/min)
+    // 1 m³ = 1000 litros
+    flowRateM3PM = flowRateLPM / 1000.0;
+
+    // Opcional: Acumular litros totales (si quieres un contador de consumo)
+    totalLiters += flowRateLPS; // Sumamos los litros que pasaron en ese segundo
+
+    // --- Mostrar en el Monitor Serial (para depuración y registro) ---
+    Serial.print("Pulsos en 1s: ");
+    Serial.print(currentPulses);
+    Serial.print(" | Caudal: ");
+    Serial.print(flowRateLPM, 2); // Mostrar con 2 decimales
+    Serial.print(" LPM (");
+    Serial.print(flowRateM3PM, 4); // Mostrar con 4 decimales para m3/min
+    Serial.println(" m3/min)");
+    Serial.print("Litros Acumulados: ");
+    Serial.println(totalLiters, 2); // Mostrar con 2 decimales
+
+    // --- Mostrar en la Pantalla LCD ---
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Caudal:");
+
+    lcd.setCursor(0, 1);
+    // Mostrar LPM
+    lcd.print("LPM: ");
+    lcd.print(flowRateLPM, 2); // Mostrar con 2 decimales
+    lcd.print(" "); // Espacio para borrar residuos
+
+    // Puedes alternar o añadir una línea para m3/min si la pantalla lo permite,
+    // o hacer que la segunda línea muestre el total de litros si es más útil.
+    // Ejemplo de alternar (simplemente descomenta y comenta la línea de LPM de arriba):
+    /*
+    lcd.setCursor(0, 1);
+    lcd.print("m3/min: ");
+    lcd.print(flowRateM3PM, 4); // Mostrar con 4 decimales
+    */
+    
+    // Ejemplo de mostrar litros acumulados en la segunda línea:
+    /*
+    lcd.setCursor(0, 1);
+    lcd.print("Total L: ");
+    lcd.print(totalLiters, 2);
+    */
+  }
+}

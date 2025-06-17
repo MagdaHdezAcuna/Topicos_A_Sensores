@@ -1,0 +1,46 @@
+// --- Variables globales ---
+volatile int NumPulsos;               // Contador de pulsos desde el sensor
+const int PinSensor = 2;              // Pin digital donde se conecta el sensor
+const float factor_conversion = 15.5;  // Factor para convertir pulsos a L/min
+
+// --- Rutina de interrupción ---
+void ContarPulsos() {
+  NumPulsos++;  // Incrementar el conteo por cada pulso detectado
+}
+
+// --- Función para medir la frecuencia de los pulsos ---
+int ObtenerFrecuencia() {
+  int frecuencia;
+  NumPulsos = 0;       // Reiniciar el contador
+  interrupts();        // Habilitar interrupciones
+  delay(1000);         // Medición durante 1 segundo
+  noInterrupts();      // Deshabilitar interrupciones para leer el valor con seguridad
+  frecuencia = NumPulsos;  // Pulsos por segundo = Hz
+  return frecuencia;
+}
+
+// --- Configuración inicial ---
+void setup() {
+  Serial.begin(9600);               // Iniciar comunicación serial
+  pinMode(PinSensor, INPUT);        // Definir pin del sensor como entrada
+  attachInterrupt(digitalPinToInterrupt(PinSensor), ContarPulsos, RISING);
+}
+
+// --- Bucle principal ---
+void loop() {
+  float frecuencia = ObtenerFrecuencia();             // Pulsos por segundo
+  float caudal_L_min = frecuencia / factor_conversion; // Litros por minuto
+  float caudal_L_s = caudal_L_min / 60.0;              // Litros por segundo
+  float caudal_L_h = caudal_L_min * 60.0;              // Litros por hora
+
+  // Mostrar resultados por el monitor serial
+  Serial.print("Frecuencia: ");
+  Serial.print(frecuencia);
+  Serial.print(" Hz\tCaudal: ");
+  Serial.print(caudal_L_s, 4);
+  Serial.print(" L/s\t");
+  Serial.print(caudal_L_min, 3);
+  Serial.print(" L/min\t");
+  Serial.print(caudal_L_h, 3);
+  Serial.println(" L/h");
+}

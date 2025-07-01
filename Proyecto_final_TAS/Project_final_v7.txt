@@ -1,0 +1,322 @@
+#include <Wire.h>
+#include <MPU6050.h>
+#include <HardwareSerial.h>
+#include <math.h>
+#include "thingProperties.h"
+
+#define GPS_RX 16
+#define GPS_TX 17
+#define PI 3.14159265
+#define PIN_MOVIMIENTO 34  // Pin para el sensor de movimiento
+
+// Variables GPS
+String gpsData = "";
+String latStr = "";
+String lonStr = "";
+String utcTime = "";
+char latDir, lonDir;
+bool newGPSData = false;
+float latitude = 0.0;
+float longitude = 0.0;
+
+// Variables Velocidad GPS
+float speedKnots = 0.0;
+float speedKmh = 0.0;
+bool newSpeedData = false;
+
+// Variables MPU6050
+MPU6050 mpu;
+unsigned long lastAccelTime = 0;
+const long accelInterval = 200;
+float accel_x, accel_y, accel_z, magnitude;
+
+// Variables para detección de movimiento brusco (Acelerómetro)
+bool accelAlertTriggered = false;
+unsigned long lastAccelAlert = 0;
+const long accelAlertInterval = 5000; // 5 segundos entre alertas
+const float ACCEL_THRESHOLD = 1.4;    // 1.4g (1g gravedad + 0.4g movimiento)
+
+// Geocerca (Geofencing) - Actualizada a 200m
+const float REF_LAT = 22.772429;    // Latitud de referencia
+const float REF_LON = -102.644426;   // Longitud de referencia
+const float FENCE_RADIUS = 200.0;    // Radio en metros (actualizado a 200m)
+bool insideFence = false;            // Estado actual
+bool previousFenceState = false;     // Estado anterior para detectar cambios
+
+// Temporizador para enviar ubicación
+unsigned long lastLocationSend = 0;
+const long locationInterval = 10000; // 10 segundos
+
+// Variable para almacenar el mensaje completo
+String mensajeCompleto = "";
+
+// Variables para detección inmediata de movimiento
+bool lastMovState = false;           // Último estado del sensor
+bool movDetectado = false;            // Bandera de detección
+unsigned long lastMovAlert = 0;       // Tiempo de última alerta
+const long movAlertInterval = 5000;   // Intervalo entre alertas (5 segundos)
+
+void setup() {
+    // Inicializar comunicación serial
+    Serial.begin(9600);
+    delay(1500);
+    
+    // Inicializar GPS
+    Serial2.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);
+    Serial.println("Sistema GPS y acelerómetro iniciado");
+    
+    // Inicializar MPU6050
+    Wire.begin();
+    mpu.initialize();
+    mpu.setFullScaleAccelRange(MPU6050_ACCEL_FS_2);
+    
+    if (!mpu.testConnection()) {
+        Serial.println("Error: MPU6050 no conectado!");
+        while(1);
+    }
+    Serial.println("MPU6050 y GPS listos");
+    
+    // Configurar pin de movimiento
+    pinMode(PIN_MOVIMIENTO, INPUT);
+    
+    // Mostrar configuración de la geocerca (actualizada a 200m)
+    Serial.print("Geocerca configurada en: ");
+    Serial.print(REF_LAT, 6);
+    Serial.print(", ");
+    Serial.print(REF_LON, 6);
+    Serial.print(" con radio de ");
+    Serial.print(FENCE_RADIUS);
+    Serial.println(" metros");
+    
+    // Inicializar Arduino Cloud
+    initProperties();
+    ArduinoCloud.begin(ArduinoIoTPreferredConnection);
+    setDebugMessageLevel(2);
+    ArduinoCloud.printDebugInfo();
+}
+
+void loop() {
+    ArduinoCloud.update(); // Mantener conexión con la nube
+    
+    // Leer datos GPS
+    while (Serial2.available()) {
+        char c = Serial2.read();
+        if (c == '\n') {
+            if (gpsData.startsWith("$GPGLL")) {
+                parseGPGLL();
+            }
+            if (gpsData.startsWith("$GPRMC")) {
+                parseGPRMC();
+            }
+            gpsData = "";
+        } else if (c != '\r') {
+            gpsData += c;
+        }
+    }
+    
+    // Leer acelerómetro
+    unsigned long currentTime = millis();
+    if (currentTime - lastAccelTime >= accelInterval) {
+        lastAccelTime = currentTime;
+        readAccelerometer();
+    }
+    
+    // Procesar nuevos datos GPS
+    if (newGPSData) {
+        Serial.print("Hora UTC: ");
+        Serial.print(utcTime);
+        Serial.print(" - Ubicacion: ");
+        Serial.print(latitude, 6);
+        Serial.print(",");
+        Serial.println(longitude, 6);
+        
+        // Verificar geocerca
+        float distance = calculateDistance(latitude, longitude, REF_LAT, REF_LON);
+        previousFenceState = insideFence;
+        insideFence = (distance <= FENCE_RADIUS);
+        
+        Serial.print("Distancia a referencia: ");
+        Serial.print(distance);
+        Serial.println(" metros");
+        
+        // Detectar transiciones de estado
+        if (insideFence && !previousFenceState) {
+            Serial.println("ALERTA: Entrando en geocerca!");
+        } 
+        else if (!insideFence && previousFenceState) {
+            Serial.println("ALERTA: Saliendo de geocerca!");
+        }
+        
+        newGPSData = false;
+    }
+    
+    // Procesar datos de velocidad
+    if (newSpeedData) {
+        Serial.print("Velocidad: ");
+        Serial.print(speedKnots, 1);
+        Serial.print(" nudos, ");
+        Serial.print(speedKmh, 1);
+        Serial.println(" km/h");
+        newSpeedData = false;
+    }
+    
+    // --- DETECCIÓN INMEDIATA DE MOVIMIENTO (Sensor PIR) ---
+    bool currentMovState = (digitalRead(PIN_MOVIMIENTO) == HIGH);
+    
+    // Detectar flanco ascendente (nueva detección)
+    if (currentMovState && !lastMovState) {
+        movDetectado = true;
+        Serial.println("Movimiento detectado!");
+    }
+  
+    lastMovState = currentMovState;
+  
+    // Enviar alerta inmediata si se detectó movimiento
+    if (movDetectado && (millis() - lastMovAlert >= movAlertInterval)) {
+        locacion = "ALERTA: Se ha detectado movimiento";
+        Serial.println("Enviando alerta inmediata de movimiento");
+        movDetectado = false;  // Resetear bandera
+        lastMovAlert = millis();
+    }
+    
+    // --- DETECCIÓN DE MOVIMIENTO BRUSCO (Acelerómetro) ---
+    if (magnitude > ACCEL_THRESHOLD) {
+        if (!accelAlertTriggered || (millis() - lastAccelAlert >= accelAlertInterval)) {
+            String alerta = "ALERTA: Movimiento brusco! Magnitud: " + String(magnitude, 2) + "g";
+            locacion = alerta;
+            Serial.println(alerta);
+            accelAlertTriggered = true;
+            lastAccelAlert = millis();
+            
+            // Reiniciamos el temporizador de ubicación para evitar sobrescritura inmediata
+            lastLocationSend = millis();
+        }
+    } else {
+        accelAlertTriggered = false;
+    }
+    
+    // Enviar mensaje completo cada 10 segundos (si no hay alerta reciente)
+    if (millis() - lastLocationSend >= locationInterval) {
+        if (latitude != 0.0 && longitude != 0.0) {
+            // Construir mensaje completo
+            mensajeCompleto = "GEOCERCA: " + String(FENCE_RADIUS) + "m | ";
+            mensajeCompleto += "UBIC: " + String(latitude, 6) + "," + String(longitude, 6) + " | ";
+            mensajeCompleto += "VEL: " + String(speedKmh, 1) + " km/h | ";
+            mensajeCompleto += "UTC: " + utcTime + " | ";
+            mensajeCompleto += "ESTADO: " + String(insideFence ? "DENTRO" : "FUERA");
+            
+            // Incluir estado del sensor
+            if (currentMovState) {
+                mensajeCompleto += " | MOV: ACTIVO";
+            }
+            
+            // Incluir magnitud del acelerómetro
+            mensajeCompleto += " | ACEL: " + String(magnitude, 2) + "g";
+            
+            // Enviar mensaje a Arduino Cloud
+            locacion = mensajeCompleto;
+            Serial.println("Enviando mensaje: " + mensajeCompleto);
+        } else {
+            Serial.println("Datos GPS no disponibles para enviar");
+        }
+        lastLocationSend = millis();
+    }
+}
+
+// Función para calcular distancia usando fórmula de Haversine
+float calculateDistance(float lat1, float lon1, float lat2, float lon2) {
+    const float R = 6371000; // Radio de la Tierra en metros
+    
+    // Convertir grados a radianes
+    float phi1 = lat1 * PI / 180.0;
+    float phi2 = lat2 * PI / 180.0;
+    float deltaPhi = (lat2 - lat1) * PI / 180.0;
+    float deltaLambda = (lon2 - lon1) * PI / 180.0;
+
+    // Calcular a
+    float a = sin(deltaPhi / 2.0) * sin(deltaPhi / 2.0) +
+              cos(phi1) * cos(phi2) *
+              sin(deltaLambda / 2.0) * sin(deltaLambda / 2.0);
+    
+    // Calcular c
+    float c = 2.0 * atan2(sqrt(a), sqrt(1.0 - a));
+    
+    // Distancia en metros
+    return R * c;
+}
+
+void parseGPGLL() {
+    int firstComma = gpsData.indexOf(',');
+    int secondComma = gpsData.indexOf(',', firstComma + 1);
+    int thirdComma = gpsData.indexOf(',', secondComma + 1);
+    int fourthComma = gpsData.indexOf(',', thirdComma + 1);
+    int fifthComma = gpsData.indexOf(',', fourthComma + 1);
+    int sixthComma = gpsData.indexOf(',', fifthComma + 1);
+
+    if (sixthComma != -1) {
+        latStr = gpsData.substring(firstComma + 1, secondComma);
+        latDir = gpsData.charAt(secondComma + 1);
+        lonStr = gpsData.substring(thirdComma + 1, fourthComma);
+        lonDir = gpsData.charAt(fourthComma + 1);
+        
+        utcTime = gpsData.substring(fifthComma + 1, sixthComma);
+        
+        latitude = convertCoords(latStr);
+        longitude = convertCoords(lonStr);
+        
+        if (latDir == 'S') latitude = -latitude;
+        if (lonDir == 'W') longitude = -longitude;
+        
+        newGPSData = true;
+    }
+}
+
+void parseGPRMC() {
+    int firstComma = gpsData.indexOf(',');
+    int secondComma = gpsData.indexOf(',', firstComma + 1);
+    int thirdComma = gpsData.indexOf(',', secondComma + 1);
+    int fourthComma = gpsData.indexOf(',', thirdComma + 1);
+    int fifthComma = gpsData.indexOf(',', fourthComma + 1);
+    int sixthComma = gpsData.indexOf(',', fifthComma + 1);
+    int seventhComma = gpsData.indexOf(',', sixthComma + 1);
+    int eighthComma = gpsData.indexOf(',', seventhComma + 1);
+    
+    if (eighthComma == -1) return;
+    
+    String status = gpsData.substring(secondComma + 1, thirdComma);
+    if (status != "A") return;
+    
+    String speedStr = gpsData.substring(seventhComma + 1, eighthComma);
+    if (speedStr.length() > 0) {
+        speedKnots = speedStr.toFloat();
+        speedKmh = speedKnots * 1.852;
+        newSpeedData = true;
+    }
+}
+
+float convertCoords(String coord) {
+    if (coord.length() < 4) return 0.0;
+    int dotIndex = coord.indexOf('.');
+    if (dotIndex < 2) return 0.0;
+    float degrees = coord.substring(0, dotIndex - 2).toFloat();
+    float minutes = coord.substring(dotIndex - 2).toFloat();
+    return degrees + (minutes / 60.0);
+}
+
+void readAccelerometer() {
+    int16_t ax, ay, az;
+    mpu.getAcceleration(&ax, &ay, &az);
+    
+    // Conversión CORRECTA a unidades g (para rango ±2g)
+    accel_x = ax / 16384.0; // 16384 LSB/g para ±2g
+    accel_y = ay / 16384.0;
+    accel_z = az / 16384.0;
+
+    // Calcular magnitud CORRECTA (vector en 3D)
+    magnitude = sqrt(accel_x*accel_x + accel_y*accel_y + accel_z*accel_z);
+}
+
+void onLocacionChange() {
+    // Esta función se ejecuta cuando se cambia locacion desde la nube
+    // No necesitamos hacer nada aquí si solo enviamos datos
+}
